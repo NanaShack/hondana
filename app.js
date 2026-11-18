@@ -47,9 +47,9 @@ const DB = {
   findByIsbn(isbn) { for (const [id, b] of this.books) if (b.isbn === isbn) return id; return null; },
 };
 
-const S = { filter: "all", q: "", sort: "added", group: false, editing: null };
-try { Object.assign(S, JSON.parse(localStorage.getItem(PREF_KEY) || "{}")); } catch (e) {}
-function savePrefs() { try { localStorage.setItem(PREF_KEY, JSON.stringify({ filter: S.filter, sort: S.sort, group: S.group })); } catch (e) {} }
+const S = { filter: "all", q: "", sort: "added", group: true, editing: null };
+try { const p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}"); if (p.v !== 2) delete p.group; Object.assign(S, p); } catch (e) {}
+function savePrefs() { try { localStorage.setItem(PREF_KEY, JSON.stringify({ v: 2, filter: S.filter, sort: S.sort, group: S.group })); } catch (e) {} }
 
 /* ---------- toast / busy ---------- */
 let toastT;
@@ -130,25 +130,143 @@ async function lookup(isbn) {
   return null;
 }
 
-/* ---------- list ---------- */
-function seriesKey(b) {
-  if (b.series) return norm(b.series);
-  return norm(String(b.title).replace(/[（(〈＜<\[【]?\s*(第)?[0-9０-９上中下]+\s*(巻)?\s*[）)〉＞>\]】]?.*$/, "").replace(/\s+[0-9０-９]+\s*$/, ""));
+/* ---------- シリーズ ---------- */
+// 「青のオーケストラ（13）」「呪術廻戦 16」「銀魂（第11巻）」「かがみの孤城 上」などから シリーズ名と巻 を取り出す
+const VOL_RE = /^(.+?)\s*(?:[（(〈<＜\[【]\s*(?:第)?(\d+|[上中下])\s*(?:巻)?\s*[)）〉>＞\]】]|\s(\d+|[上中下])(?:巻)?(?=\s|$)|(\d+)\s*$)/;
+const KANJI_VOL = { 上: 1, 中: 2, 下: 3 };
+function baseSeries(b) {
+  const t = String(b.title || "").normalize("NFKC").trim();
+  const m = VOL_RE.exec(t);
+  const vRaw = m ? (m[2] || m[3] || m[4]) : "";
+  const kanji = !!KANJI_VOL[vRaw];
+  const vol = kanji ? KANJI_VOL[vRaw] : (+vRaw || (!/[上中下]/.test(t) && +b.volume) || 0);
+  // 古いスプシの「セット名」には巻数や副題が混ざっていることがあるので取り除く
+  let sname = String(b.series || "").normalize("NFKC").trim();
+  const sm = sname && VOL_RE.exec(sname);
+  if (sm) sname = sm[1].trim();
+  const own = norm(sname) === norm(t);           // セット名＝タイトル（単巻扱い）
+  const name = (!own && sname) || (m ? m[1].trim() : "") || "";
+  const weak = !b.series || own || (m && norm(sname) === norm(m[1])); // セット名がタイトル由来でしかない
+  return { key: name ? norm(name) : "", name, vol, kanji, weak };
 }
-function seriesName(b) { return b.series || String(b.title).replace(/[（(].*$/, "").replace(/\s+[0-9０-９]+\s*$/, ""); }
+/* 本棚全体を見てシリーズを決める（同じ作家でタイトルの書き出しが長く同じ本もまとめる） */
+let SERIES = new Map();
+function buildSeries() {
+  SERIES = new Map();
+  const ents = [...DB.books.entries()];
+  const keyCount = new Map();
+  for (const [id, b] of ents) { const s = baseSeries(b); SERIES.set(id, s); if (s.key) keyCount.set(s.key, (keyCount.get(s.key) || 0) + 1); }
+  const byAuthor = new Map();
+  for (const [id, b] of ents) {
+    const s = SERIES.get(id);
+    if (s.key && keyCount.get(s.key) > 1) continue;
+    if (!s.weak) continue;
+    const a = nameKeyOf(b.author); if (!a) continue;
+    if (!byAuthor.has(a)) byAuthor.set(a, []);
+    byAuthor.get(a).push([id, String(b.title || "").normalize("NFKC").trim()]);
+  }
+  const lcp = (x, y) => { let i = 0; while (i < x.length && i < y.length && x[i] === y[i]) i++; return x.slice(0, i); };
+  for (const list of byAuthor.values()) {
+    if (list.length < 2) continue;
+    list.sort((a, b) => a[1].localeCompare(b[1], "ja"));
+    let cluster = [list[0]];
+    const flush = () => {
+      if (cluster.length < 2) return;
+      let p = cluster[0][1]; for (const [, t] of cluster) p = lcp(p, t);
+      const name = p.replace(/[\s　はのをがにと・:：、,\-ー〜~]+$/, "").trim();
+      if (norm(name).length < 4) return;
+      for (const [id] of cluster) SERIES.set(id, { ...SERIES.get(id), key: norm(name), name });
+    };
+    for (let i = 1; i < list.length; i++) {
+      const common = lcp(list[i - 1][1], list[i][1]);
+      if (norm(common).length >= 6) cluster.push(list[i]); else { flush(); cluster = [list[i]]; }
+    }
+    flush();
+  }
+}
+function nameKeyOf(author) { return String(author || "").split(/[、,／/]/)[0].normalize("NFKC").replace(/[\s　]/g, ""); }
+function seriesInfo(b) { return (b.id && SERIES.get(b.id)) || baseSeries(b); }
+function seriesKey(b) { return seriesInfo(b).key || "__" + norm(b.title); }
+function volSort(a, b) {
+  const va = seriesInfo(a).vol, vb = seriesInfo(b).vol;
+  return (va - vb) || String(a.title).localeCompare(String(b.title), "ja", { numeric: true });
+}
 function sorter(a, b) {
   if (S.sort === "added") return (b.addedAt || 0) - (a.addedAt || 0);
   const k = S.sort, ka = String(a[k] || "￿"), kb = String(b[k] || "￿");
   return ka.localeCompare(kb, "ja", { numeric: true }) || String(a.title).localeCompare(String(b.title), "ja", { numeric: true });
 }
-function coverOrSpine(b) {
-  return b.cover ? `<img class="cover" src="${esc(b.cover)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'spine s-${esc(b.status)}'}))">`
-    : `<span class="spine s-${esc(b.status)}"></span>`;
+
+/* ---------- 表紙 ---------- */
+// 登録済みの表紙 → 国立国会図書館のサムネイル → 背表紙風の代わりの絵 の順に試す
+const ndlThumb = (isbn) => (isbn ? `https://ndlsearch.ndl.go.jp/thumbnail/${isbn}.jpg` : "");
+function hue(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) % 360; return h; }
+function placeholder(b, cls) {
+  const label = seriesInfo(b).name || b.title || "";
+  return `<span class="${cls} ph" style="--h:${hue(label)}"><span>${esc(String(label).slice(0, 10))}</span></span>`;
 }
+function coverImg(b, cls = "cover") {
+  const first = b.cover || ndlThumb(b.isbn);
+  if (!first) return placeholder(b, cls);
+  const fb = b.cover && b.isbn ? ndlThumb(b.isbn) : "";
+  return `<img class="${cls} cv" src="${esc(first)}" data-fb="${esc(fb)}" data-ph="${esc(placeholder(b, cls))}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
+}
+document.addEventListener("error", (e) => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !img.classList.contains("cv")) return;
+  if (img.dataset.fb) { const fb = img.dataset.fb; img.dataset.fb = ""; img.src = fb; return; }
+  const t = document.createElement("template"); t.innerHTML = img.dataset.ph || ""; img.replaceWith(t.content);
+}, true);
+document.addEventListener("load", (e) => {
+  const img = e.target; // 1x1 などの「画像なし」を受け取ったときも代わりの絵にする
+  if (img instanceof HTMLImageElement && img.classList.contains("cv") && img.naturalWidth < 10) img.dispatchEvent(new Event("error"));
+}, true);
+
+/* 表紙が未登録の本は openBD から自動で取ってくる（7日に1回まで） */
+let coverFilling = false;
+async function autoFillCovers() {
+  if (coverFilling || !navigator.onLine) return;
+  const week = 7 * 86400000;
+  const targets = [...DB.books.entries()].filter(([, b]) => b.isbn && !b.cover && !(b.coverTried > Date.now() - week));
+  if (!targets.length) return;
+  coverFilling = true; let got = 0;
+  try {
+    for (let i = 0; i < targets.length; i += 100) {
+      const chunk = targets.slice(i, i + 100);
+      const j = await fetchJson(`https://api.openbd.jp/v1/get?isbn=${chunk.map(([, b]) => b.isbn).join(",")}`, 20000);
+      chunk.forEach(([id, b], k) => {
+        const s = j[k] && j[k].summary;
+        const nb = { ...b, coverTried: Date.now() };
+        if (s && s.cover) { nb.cover = s.cover; got++; }
+        if (s && !nb.releaseDate && s.pubdate) nb.releaseDate = fmtDate(s.pubdate);
+        DB.books.set(id, nb);
+      });
+    }
+  } catch (e) {} finally { coverFilling = false; DB.save(); }
+  if (got) render();
+}
+
+/* ---------- list ---------- */
 function rowHtml(b) {
-  return `<li><button class="row" data-id="${esc(b.id)}">${coverOrSpine(b)}<span class="main"><div class="t">${esc(b.title)}</div><div class="a">${esc(b.author || "著者未登録")}${b.publisher ? " · " + esc(b.publisher) : ""}</div></span><span class="pill s-${esc(b.status)}">${esc(b.status)}</span></button></li>`;
+  return `<li><button class="row" data-id="${esc(b.id)}">${coverImg(b)}<span class="main"><div class="t">${esc(b.title)}</div><div class="a">${esc(b.author || "著者未登録")}${b.publisher ? " · " + esc(b.publisher) : ""}</div></span><span class="pill s-${esc(b.status)}">${esc(b.status)}</span></button></li>`;
+}
+function volRange(g) {
+  const infos = g.map(seriesInfo);
+  const nums = infos.filter((x) => x.vol > 0 && !x.kanji).map((x) => x.vol).sort((a, b) => a - b);
+  if (nums.length && nums.length === infos.length) return nums[0] === nums[nums.length - 1] ? `${nums[0]}巻` : `${nums[0]}〜${nums[nums.length - 1]}巻`;
+  const kj = [...new Set(infos.filter((x) => x.kanji).sort((a, b) => a.vol - b.vol).map((x) => "上中下"[x.vol - 1]))];
+  return kj.length && !nums.length ? kj.join("・") : "";
+}
+function groupHtml(key, g) {
+  const n = g.length, d = g.filter((b) => b.status === "読了").length, r = g.filter((b) => b.status === "読書中").length;
+  const sorted = [...g].sort(volSort);
+  const face = sorted.find((b) => b.cover) || sorted[0];
+  const st = d === n ? "読了" : r ? "読書中" : d ? `${n - d}冊未読` : "未読";
+  const stCls = d === n ? "s-読了" : r ? "s-読書中" : "";
+  return `<li><button class="row grp" data-series="${esc(key)}"><span class="stack">${coverImg(face)}</span><span class="main"><div class="t">${esc(seriesInfo(face).name)}</div><div class="a">${esc(face.author || "")} · ${n}冊${volRange(g) ? "（" + volRange(g) + "）" : ""}</div><div class="bar"><i style="width:${(d / n) * 100}%;background:var(--done)"></i><i style="width:${(r / n) * 100}%;background:var(--reading)"></i></div></span><span class="pill ${stCls}">${esc(st)}</span></button></li>`;
 }
 function render() {
+  buildSeries();
   const all = [...DB.books.entries()].map(([id, b]) => ({ id, ...b }));
   const counts = { all: all.length }; STATUSES.forEach((s) => (counts[s] = all.filter((b) => b.status === s).length));
   $("count").innerHTML = `<b>${counts.all}</b> 冊`;
@@ -166,16 +284,43 @@ function render() {
   if (!rows.length) { empty.hidden = false; empty.innerHTML = `<h2>見つかりませんでした</h2><p>検索語や絞り込みを変えてみてください。</p>`; list.innerHTML = ""; return; }
   empty.hidden = true;
   if (S.group) {
+    // 並び順は保ったまま、同じシリーズを最初に出てきた位置に1行でまとめる
     const groups = new Map();
     for (const b of rows) { const k = seriesKey(b); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(b); }
-    list.innerHTML = [...groups.values()].map((g) => {
-      if (g.length === 1) return rowHtml(g[0]);
-      const n = g.length, d = g.filter((b) => b.status === "読了").length, r = g.filter((b) => b.status === "読書中").length;
-      const c = g.find((b) => b.cover);
-      const lead = c ? `<img class="cover" src="${esc(c.cover)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="spine ${d === n ? "s-読了" : r ? "s-読書中" : ""}"></span>`;
-      return `<li><button class="row" data-series="${esc(seriesKey(g[0]))}">${lead}<span class="main"><div class="t">${esc(seriesName(g[0]))}</div><div class="a">${esc(g[0].author)}${g[0].publisher ? " · " + esc(g[0].publisher) : ""}</div><div class="bar"><i style="width:${(d / n) * 100}%;background:var(--done)"></i><i style="width:${(r / n) * 100}%;background:var(--reading)"></i></div></span><span class="series-meta"><b>${n}冊</b>読了 ${d}</span></button></li>`;
-    }).join("");
+    list.innerHTML = [...groups.entries()].map(([k, g]) => (g.length === 1 ? rowHtml(g[0]) : groupHtml(k, g))).join("");
   } else list.innerHTML = rows.map(rowHtml).join("");
+}
+
+/* シリーズの巻一覧 */
+function openSeries(key) {
+  buildSeries();
+  const g = [...DB.books.entries()].map(([id, b]) => ({ id, ...b })).filter((b) => seriesKey(b) === key).sort(volSort);
+  if (!g.length) { closeSheet(); return; }
+  const name = seriesInfo(g[0]).name, d = g.filter((b) => b.status === "読了").length;
+  S.editing = "__series:" + key;
+  openSheet(`<div class="head">${coverImg(g.find((b) => b.cover) || g[0], "hcover")}<div class="main"><h2>${esc(name)}</h2><p class="sub">${esc(g[0].author || "")}<br>${g.length}冊${volRange(g) ? "（" + volRange(g) + "）" : ""} · 読了 ${d} / ${g.length}</p></div></div>
+    <ul class="vlist">${g.map((b) => `<li><button class="vrow" data-id="${esc(b.id)}">${coverImg(b, "vcover")}<span class="main"><div class="t">${esc(b.title)}</div>${b.memo ? `<div class="a">${esc(b.memo)}</div>` : ""}</span></button><button class="pill s-${esc(b.status)} vst" data-cycle="${esc(b.id)}" aria-label="読書状況を切り替え">${esc(b.status)}</button></li>`).join("")}</ul>
+    <p class="hint" style="margin:8px 0 0">右の読書状況をタップすると 未読 → 読書中 → 読了 と切り替わります。</p>
+    <div class="actions"><button class="btn" id="allDone">まとめて読了にする</button><button class="btn" id="renameSeries">シリーズ名を変える</button></div>
+    <div class="actions" style="margin-top:8px"><button class="btn primary" id="closeSeries">閉じる</button></div>`);
+  $("sheet").querySelector(".vlist").onclick = (e) => {
+    const c = e.target.closest("[data-cycle]");
+    if (c) { const id = c.dataset.cycle, b = DB.books.get(id); const nx = STATUSES[(STATUSES.indexOf(b.status) + 1) % 3]; DB.put(id, { ...b, status: nx, updatedAt: Date.now() }); render(); openSeries(key); return; }
+    const v = e.target.closest(".vrow"); if (v) openDetail(v.dataset.id);
+  };
+  $("allDone").onclick = () => { const now = Date.now(); for (const b of g) DB.books.set(b.id, { ...DB.books.get(b.id), status: "読了", updatedAt: now }); DB.save(); render(); openSeries(key); toast(`「${name}」を全巻読了にしました`); };
+  $("renameSeries").onclick = () => {
+    openSheet(`<h2>シリーズ名を変える</h2><p class="sub">${g.length}冊すべてのシリーズ名を変えます。別のシリーズと同じ名前にすると1つにまとまります。</p>
+      <div class="f full"><label for="f-sname">シリーズ名</label><input id="f-sname" value="${esc(name)}"></div>
+      <div class="actions"><button class="btn" id="cancelRename">やめる</button><button class="btn primary" id="doRename">変更する</button></div>`);
+    $("cancelRename").onclick = () => openSeries(key);
+    $("doRename").onclick = () => {
+      const nn = $("f-sname").value.trim(); if (!nn) { toast("シリーズ名を入力してください"); return; }
+      const now = Date.now(); for (const b of g) DB.books.set(b.id, { ...DB.books.get(b.id), series: nn, updatedAt: now });
+      DB.save(); render(); openSeries(norm(nn)); toast("シリーズ名を変えました");
+    };
+  };
+  $("closeSeries").onclick = closeSheet;
 }
 $("sort").value = S.sort; $("groupToggle").checked = S.group;
 $("chips").addEventListener("click", (e) => { const c = e.target.closest(".chip"); if (!c) return; S.filter = c.dataset.f; savePrefs(); render(); });
@@ -185,11 +330,7 @@ $("groupToggle").addEventListener("change", (e) => { S.group = e.target.checked;
 $("list").addEventListener("click", (e) => {
   const r = e.target.closest(".row"); if (!r) return;
   if (r.dataset.id) openDetail(r.dataset.id);
-  else if (r.dataset.series) {
-    const first = [...DB.books.values()].find((b) => seriesKey(b) === r.dataset.series);
-    S.group = false; $("groupToggle").checked = false; S.q = first ? seriesName(first) : ""; $("q").value = S.q;
-    S.sort = "title"; $("sort").value = "title"; savePrefs(); render(); window.scrollTo(0, 0);
-  }
+  else if (r.dataset.series) openSeries(r.dataset.series);
 });
 
 /* ---------- sheet ---------- */
@@ -213,7 +354,7 @@ function bindSeg() {
   });
 }
 function headHtml(b, title) {
-  return `<div class="head">${b.cover ? `<img src="${esc(b.cover)}" alt="" referrerpolicy="no-referrer">` : ""}<div class="main"><h2>${esc(title || b.title)}</h2><p class="sub">${esc(b.author || "")}${b.publisher ? " · " + esc(b.publisher) : ""}</p></div></div>`;
+  return `<div class="head">${b.title || b.isbn ? coverImg(b, "hcover") : ""}<div class="main"><h2>${esc(title || b.title)}</h2><p class="sub">${esc(b.author || "")}${b.publisher ? " · " + esc(b.publisher) : ""}</p></div></div>`;
 }
 function openDetail(id, notice) {
   const b = DB.books.get(id); if (!b) return; S.editing = id;
@@ -476,7 +617,7 @@ $("importInput").addEventListener("change", async (e) => {
       records = rows.map((r) => Object.fromEntries(head.map((h, i) => [h.trim(), r[i] ?? ""])));
     }
     const r = importRecords(records);
-    closeSheet(); render();
+    closeSheet(); render(); autoFillCovers();
     toast(`取り込みました：新規 ${r.added} 冊・更新 ${r.updated} 冊`, 4500);
   } catch (err) { console.error(err); toast("このファイルは読み込めませんでした（JSONかCSVを選んでください）", 5000); }
 });
@@ -546,6 +687,8 @@ $("menuBtn").onclick = () => {
 /* ---------- boot ---------- */
 DB.load();
 render();
+autoFillCovers();
+window.addEventListener("online", autoFillCovers);
 try { navigator.storage?.persist?.(); } catch (e) {}
 if (DB.books.size && (!DB.meta.lastBackup || Date.now() - DB.meta.lastBackup > 30 * 86400000) && Date.now() - (DB.meta.lastNudge || 0) > 7 * 86400000) {
   DB.meta.lastNudge = Date.now(); DB.save();

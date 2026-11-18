@@ -175,7 +175,9 @@ function collect() {
     if (prev) { if (!prev.isbn && it.isbn) prev.isbn = it.isbn; if (prev.date.length < it.date.length) prev.date = it.date; continue; }
     const nt = norm(it.title); let sk = "";
     for (const k of IDX.series.keys()) if (nt.startsWith(k) && k.length > sk.length) sk = k;
-    seen.set(key, { ...it, key, series: sk ? IDX.series.get(sk) : "", phase: phase(it.date) });
+    const own = /^(.+?)\s*(?:[（(〈<\[【]\s*(?:第)?\d+\s*(?:巻)?\s*[)）〉>\]】]|\s\d+(?:巻)?(?=\s|$)|\d+\s*$)/.exec(String(it.title).normalize("NFKC"));
+    const gname = sk ? IDX.series.get(sk) : own ? own[1].trim() : "";
+    seen.set(key, { ...it, key, series: sk ? IDX.series.get(sk) : "", gkey: gname ? norm(gname) : key, gname, phase: phase(it.date) });
   }
   return [...seen.values()];
 }
@@ -234,7 +236,17 @@ function render() {
     return;
   }
   empty.hidden = true;
-  const sec = (title, note, arr) => arr.length ? `<section class="sec"><h2>${title}<small>${note}</small></h2>${arr.map(itemHtml).join("")}</section>` : "";
+  // 同じシリーズの巻は1行にまとめ、タップで開く
+  const grouped = (arr) => {
+    const m = new Map(); for (const it of arr) { if (!m.has(it.gkey)) m.set(it.gkey, []); m.get(it.gkey).push(it); }
+    return [...m.values()].map((g) => {
+      if (g.length === 1) return itemHtml(g[0]);
+      const f = g[0], badges = [f.series ? `<span class="badge">${esc(f.series)} の続き</span>` : "", g.some((i) => i.phase === "soon") ? `<span class="badge soon">発売予定</span>` : ""].join("");
+      const dates = g.map((i) => i.date).sort();
+      return `<details class="sgrp"><summary class="nb">${thumb(f)}<span class="main"><div class="t">${esc(f.gname)} <span class="cnt">${g.length}冊</span></div><div class="a">${esc(f.author)}${f.publisher ? " · " + esc(f.publisher) : ""}</div>${badges ? `<div class="badges">${badges}</div>` : ""}</span><span class="date"><b>${esc(fmtDate(dates[0]))}</b>${dates.length > 1 && dates[0] !== dates[dates.length - 1] ? "〜" + esc(fmtDate(dates[dates.length - 1])) : ""}</span></summary><div class="sgrp-in">${g.map(itemHtml).join("")}</div></details>`;
+    }).join("");
+  };
+  const sec = (title, note, arr) => arr.length ? `<section class="sec"><h2>${title}<small>${note}</small></h2>${grouped(arr)}</section>` : "";
   const asc = (a, b) => a.date.localeCompare(b.date) || a.title.localeCompare(b.title, "ja", { numeric: true });
   $("sections").innerHTML =
     sec("発売予定", `${list.filter((i) => i.phase === "soon").length}冊`, list.filter((i) => i.phase === "soon").sort(asc)) +

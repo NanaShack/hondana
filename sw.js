@@ -1,5 +1,5 @@
 // アプリ本体をキャッシュしてオフラインでも開けるようにする。更新時は VERSION を上げる。
-const VERSION = "hondana-v2";
+const VERSION = "hondana-v3";
 const SHELL = ["./", "index.html", "style.css", "app.js", "shinkan.html", "shinkan.js", "zxing.min.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {

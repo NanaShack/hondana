@@ -169,3 +169,33 @@ main{padding-block:4px calc(110px + env(safe-area-inset-bottom,0px))}
 .addrow input{flex:1;min-width:0;border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:10px 12px;font-size:16px}
 .linkrow{display:flex;flex-direction:column;gap:8px}
 .linkrow a{display:block;text-align:left;text-decoration:none;color:var(--ink)}
+
+/* ---------- 表紙・シリーズ ---------- */
+.cover{flex:none;width:40px;height:57px}
+.cover,.hcover,.vcover{border-radius:3px;object-fit:cover;background:var(--unread-bg);box-shadow:0 1px 3px rgba(0,0,0,.22)}
+.hcover{flex:none;width:64px;height:91px}
+.vcover{flex:none;width:32px;height:46px}
+.ph{display:flex;align-items:center;justify-content:center;overflow:hidden;background:linear-gradient(90deg,hsl(var(--h) 38% 34%) 0 14%,hsl(var(--h) 42% 44%) 14%);color:#fff}
+.ph span{display:block;width:1.15em;word-break:break-all;overflow-wrap:anywhere;text-align:center;font-size:9px;line-height:1.08;font-weight:700;max-height:50px;overflow:hidden;margin-left:5px}
+.hcover.ph span{font-size:12px;max-height:80px;margin-left:8px}
+.vcover.ph span{font-size:7px;max-height:40px;margin-left:4px}
+@media (prefers-color-scheme:dark){.ph{background:linear-gradient(90deg,hsl(var(--h) 30% 26%) 0 14%,hsl(var(--h) 32% 34%) 14%)}}
+.stack{flex:none;position:relative;width:46px;height:61px}
+.stack::before,.stack::after{content:"";position:absolute;width:40px;height:57px;border-radius:3px;background:var(--unread-bg);box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.stack::before{left:6px;top:0}
+.stack::after{left:3px;top:2px;background:var(--line)}
+.stack>.cover{position:absolute;left:0;top:4px;z-index:1}
+.vlist{list-style:none;margin:12px 0 0;padding:0}
+.vlist li{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
+.vrow{flex:1;min-width:0;display:flex;gap:10px;align-items:center;padding:8px 0;border:0;background:none;text-align:left}
+.vrow .main{min-width:0}
+.vrow .t{font-weight:600;font-size:14px;line-height:1.35}
+.vrow .a{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vst{border:0;cursor:pointer;padding:5px 11px}
+.head .hcover{margin-top:2px}
+.sgrp>summary{list-style:none;cursor:pointer}
+.sgrp>summary::-webkit-details-marker{display:none}
+.sgrp .cnt{font-size:12px;font-weight:600;color:var(--cloth);background:var(--cloth-soft);border-radius:6px;padding:1px 6px;margin-left:4px;white-space:nowrap}
+.sgrp[open]>summary{border-bottom-style:dashed}
+.sgrp-in{padding-left:20px}
+.sgrp-in .nb .thumb{width:34px;height:48px}
