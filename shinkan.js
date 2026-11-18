@@ -111,6 +111,7 @@ function parseItems(xmlText, author) {
       title, isbn, date, author: [...new Set(creators)].slice(0, 4).join("、") || author,
       publisher: textOf(it, "dc:publisher"), label: textOf(it, "dcndl:seriesTitle"),
       price: textOf(it, "dcndl:price"), link: textOf(it, "link"), via: author,
+      ndc: [...it.getElementsByTagName("dc:subject")].find((el) => /NDC/.test(el.getAttribute("xsi:type") || ""))?.textContent.trim() || "",
     });
   }
   return out;
@@ -164,7 +165,8 @@ $("stopBtn").onclick = () => RUN && RUN.abort();
 $("refreshBtn").onclick = () => run(true);
 
 /* ---------- 表示 ---------- */
-let FILTER = "all";
+let FILTER = "all", KIND = "all";
+function kindOf(it) { const g = Kinds.guess(it); return g.sure ? g.kind : Kinds.fromNdc(it.ndc, g.kind) || "その他"; }
 function collect() {
   const names = followed(), hidden = new Set(SK.hidden), seen = new Map();
   for (const n of names) for (const it of (SK.cache[n]?.items || [])) {
@@ -207,7 +209,7 @@ async function ensureCovers() {
 }
 function itemHtml(it) {
   const badges = [it.series ? `<span class="badge">${esc(it.series)} の続き</span>` : "", it.phase === "soon" ? `<span class="badge soon">発売予定</span>` : ""].join("");
-  return `<button class="nb" data-key="${esc(it.key)}">${thumb(it)}<span class="main"><div class="t">${esc(it.title)}</div><div class="a">${esc(it.author)}${it.publisher ? " · " + esc(it.publisher) : ""}</div>${badges ? `<div class="badges">${badges}</div>` : ""}</span><span class="date"><b>${esc(fmtDate(it.date))}</b>${it.phase === "soon" ? "発売予定" : "発売"}</span></button>`;
+  return `<button class="nb" data-key="${esc(it.key)}">${thumb(it)}<span class="main"><div class="t">${esc(it.title)}</div><div class="a">${it.kind ? `<span class="ktag">${esc(it.kind)}</span>` : ""}${esc(it.author)}${it.publisher ? " · " + esc(it.publisher) : ""}</div>${badges ? `<div class="badges">${badges}</div>` : ""}</span><span class="date"><b>${esc(fmtDate(it.date))}</b>${it.phase === "soon" ? "発売予定" : "発売"}</span></button>`;
 }
 let ITEMS = [];
 function render() {
@@ -220,7 +222,11 @@ function render() {
   ITEMS = collect();
   const counts = { all: ITEMS.length, series: ITEMS.filter((i) => i.series).length, soon: ITEMS.filter((i) => i.phase === "soon").length };
   $("chips").innerHTML = [["all", "すべて"], ["series", "シリーズの続き"], ["soon", "発売予定"]].map(([k, l]) => `<button class="chip" data-f="${k}" aria-pressed="${FILTER === k}">${l} ${counts[k]}</button>`).join("");
-  const list = ITEMS.filter((i) => FILTER === "all" || (FILTER === "series" ? i.series : i.phase === "soon"));
+  ITEMS.forEach((i) => (i.kind = kindOf(i)));
+  const kc = {}; ITEMS.forEach((i) => (kc[i.kind] = (kc[i.kind] || 0) + 1));
+  if (KIND !== "all" && !kc[KIND]) KIND = "all";
+  $("kinds").innerHTML = [["all", "ジャンル：すべて"], ...Kinds.LIST.filter((k) => kc[k]).map((k) => [k, `${k} ${kc[k]}`])].map(([k, l]) => `<button class="chip kchip" data-k="${k}" aria-pressed="${KIND === k}">${l}</button>`).join("");
+  const list = ITEMS.filter((i) => (FILTER === "all" || (FILTER === "series" ? i.series : i.phase === "soon")) && (KIND === "all" || i.kind === KIND));
   const empty = $("empty");
   if (!Object.keys(LIB.books || {}).length) {
     $("sections").innerHTML = ""; empty.hidden = false;
@@ -254,6 +260,7 @@ function render() {
     sec("最近発売", `${LOOKBACK_MONTHS}か月以内`, list.filter((i) => i.phase === "past").sort((a, b) => -asc(a, b)));
 }
 $("chips").addEventListener("click", (e) => { const c = e.target.closest(".chip"); if (!c) return; FILTER = c.dataset.f; render(); });
+$("kinds").addEventListener("click", (e) => { const c = e.target.closest(".chip"); if (!c) return; KIND = c.dataset.k; render(); });
 
 /* ---------- シート ---------- */
 function openSheet(html) { const s = $("sheet"); s.innerHTML = `<div class="grip"></div>` + html; s.hidden = false; $("veil").hidden = false; s.scrollTop = 0; }

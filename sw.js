@@ -1,6 +1,6 @@
 // アプリ本体をキャッシュしてオフラインでも開けるようにする。更新時は VERSION を上げる。
-const VERSION = "hondana-v4";
-const SHELL = ["./", "index.html", "style.css", "app.js", "covers.js", "shinkan.html", "shinkan.js", "zxing.min.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
+const VERSION = "hondana-v5";
+const SHELL = ["./", "index.html", "style.css", "app.js", "covers.js", "kinds.js", "shinkan.html", "shinkan.js", "zxing.min.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

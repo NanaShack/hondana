@@ -199,3 +199,13 @@ main{padding-block:4px calc(110px + env(safe-area-inset-bottom,0px))}
 .sgrp[open]>summary{border-bottom-style:dashed}
 .sgrp-in{padding-left:20px}
 .sgrp-in .nb .thumb{width:34px;height:48px}
+
+/* ---------- ジャンル ---------- */
+.chips.kinds{margin-top:6px}
+.kchip{font-size:12.5px;padding:5px 11px}
+.chip.kchip[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.kind-note{margin:6px 0 0;font-size:12px;color:var(--muted)}
+.ktag{display:inline-block;font-size:10.5px;font-weight:700;color:var(--cloth);background:var(--cloth-soft);border-radius:5px;padding:0 5px;margin-right:6px;vertical-align:1px}
+.kindseg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.kindseg button{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:8px 2px;font-size:13px;font-weight:600}
+.kindseg button[aria-pressed="true"]{background:var(--cloth);border-color:var(--cloth);color:var(--cloth-ink)}

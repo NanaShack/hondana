@@ -30,6 +30,8 @@
     <input id="q" type="search" placeholder="タイトル・著者・出版社・ISBNで検索" autocomplete="off">
   </div>
   <div class="chips" id="chips" role="group" aria-label="読書状況で絞り込み"></div>
+  <div class="chips kinds" id="kinds" role="group" aria-label="ジャンルで絞り込み"></div>
+  <p class="kind-note" id="kindNote" hidden></p>
   <div class="tools">
     <label class="toggle"><input type="checkbox" id="groupToggle"> シリーズでまとめる</label>
     <label>並び順 <select id="sort">
@@ -75,6 +77,7 @@
 <div class="busy" id="busy" hidden><div id="busyText">読み込み中…</div></div>
 
 <script src="zxing.min.js"></script>
+<script src="kinds.js"></script>
 <script src="covers.js"></script>
 <script src="app.js"></script>
 </body>

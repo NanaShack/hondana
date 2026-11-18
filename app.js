@@ -7,9 +7,9 @@ const PREF_KEY = "hondana.prefs";
 const FIELDS = [
   ["title", "タイトル", "full"], ["author", "著者", "full"], ["publisher", "出版社", ""], ["label", "レーベル", ""],
   ["series", "シリーズ", ""], ["volume", "巻", ""], ["isbn", "ISBN", ""], ["releaseDate", "発売日", ""],
-  ["location", "置き場所", ""], ["genres", "ジャンル", ""], ["memo", "メモ", "full"],
+  ["location", "置き場所", ""], ["genres", "タグ", ""], ["memo", "メモ", "full"],
 ];
-const CSV_COLS = ["id", "title", "author", "publisher", "label", "series", "volume", "isbn", "releaseDate", "status", "location", "genres", "memo", "cover", "addedAt"];
+const CSV_COLS = ["id", "title", "author", "publisher", "label", "series", "volume", "isbn", "releaseDate", "status", "kind", "location", "genres", "memo", "cover", "addedAt"];
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -47,9 +47,9 @@ const DB = {
   findByIsbn(isbn) { for (const [id, b] of this.books) if (b.isbn === isbn) return id; return null; },
 };
 
-const S = { filter: "all", q: "", sort: "added", group: true, editing: null };
+const S = { filter: "all", kind: "all", q: "", sort: "added", group: true, editing: null };
 try { const p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}"); if (p.v !== 2) delete p.group; Object.assign(S, p); } catch (e) {}
-function savePrefs() { try { localStorage.setItem(PREF_KEY, JSON.stringify({ v: 2, filter: S.filter, sort: S.sort, group: S.group })); } catch (e) {} }
+function savePrefs() { try { localStorage.setItem(PREF_KEY, JSON.stringify({ v: 2, filter: S.filter, kind: S.kind, sort: S.sort, group: S.group })); } catch (e) {} }
 
 /* ---------- toast / busy ---------- */
 let toastT;
@@ -230,9 +230,85 @@ async function autoFillCovers() {
   if (got) render();
 }
 
+/* ---------- ジャンルの自動判定 ---------- */
+// 自分で選んだジャンル（kindAuto=false）は変えない。確実でないもの（kindSure=false）だけ図書館の分類で確かめる
+const isFirm = (b) => b.kind && (b.kindSure || b.kindAuto === false);
+function autoKinds() {
+  let changed = 0;
+  for (const [id, b] of DB.books) {
+    if (b.kind || b.kindAuto === false) continue;
+    const g = Kinds.guess(b);
+    DB.books.set(id, { ...b, kind: g.kind, kindAuto: true, kindSure: g.sure }); changed++;
+  }
+  changed += inheritSeriesKinds();
+  if (changed) DB.save();
+  refineKinds();
+}
+/* 同じシリーズで確実に分かっている巻があれば、ほかの巻もそれに合わせる */
+function inheritSeriesKinds() {
+  buildSeries();
+  const groups = new Map();
+  for (const [id, b] of DB.books) { const k = seriesKey({ id, ...b }); if (!k.startsWith("__")) { if (!groups.has(k)) groups.set(k, []); groups.get(k).push(id); } }
+  let changed = 0;
+  for (const ids of groups.values()) {
+    if (ids.length < 2) continue;
+    const votes = {};
+    for (const id of ids) { const b = DB.books.get(id); if (isFirm(b)) votes[b.kind] = (votes[b.kind] || 0) + 1; }
+    const best = Object.entries(votes).sort((a, b) => b[1] - a[1])[0];
+    if (!best) continue;
+    for (const id of ids) {
+      const b = DB.books.get(id);
+      if (b.kindAuto !== false && !b.kindSure) { DB.books.set(id, { ...b, kind: best[0], kindSure: true }); changed++; }
+    }
+  }
+  return changed;
+}
+let kindRun = false;
+async function refineKinds() {
+  if (kindRun || !navigator.onLine) return;
+  const month = 30 * 86400000;
+  const todo = [...DB.books.entries()].filter(([, b]) => b.isbn && b.kindAuto !== false && !b.kindSure && !(b.kindCheckedAt > Date.now() - month));
+  if (!todo.length) return;
+  kindRun = true;
+  const note = $("kindNote"); let done = 0, updated = 0, fails = 0, renderT;
+  for (const [id] of todo) {
+    note.hidden = false; note.textContent = `ジャンルを判定中… ${done + 1} / ${todo.length}`;
+    const b = DB.books.get(id); if (!b) { done++; continue; }
+    try {
+      const ndc = await ndcOf(b.isbn);
+      const kind = ndc ? Kinds.fromNdc(ndc, b.kind) : b.kind;
+      const cur = DB.books.get(id);
+      if (cur && cur.kindAuto !== false) { DB.books.set(id, { ...cur, kind, kindSure: !!ndc, kindCheckedAt: Date.now() }); if (kind !== cur.kind) updated++; }
+      fails = 0;
+    } catch (e) { if (++fails >= 3) break; }
+    done++;
+    clearTimeout(renderT); renderT = setTimeout(() => { DB.save(); render(); }, 600);
+    await new Promise((r) => setTimeout(r, 1000)); // 図書館のサーバーに負担をかけないよう間をあける
+  }
+  inheritSeriesKinds(); DB.save(); render();
+  note.hidden = true; kindRun = false;
+  if (updated) toast(`${updated} 冊のジャンルを図書館の分類で直しました`);
+}
+async function ndcOf(isbn) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 40000);
+    try {
+      const r = await fetch(`https://ndlsearch.ndl.go.jp/api/opensearch?isbn=${isbn}&cnt=5&mediatype=books`, { signal: ac.signal });
+      const text = await r.text();
+      if (r.status === 429 || /<code>429<\/code>/.test(text)) { await new Promise((res) => setTimeout(res, 5000 * (attempt + 1))); continue; }
+      const doc = new DOMParser().parseFromString(text, "application/xml");
+      for (const el of doc.getElementsByTagName("dc:subject")) {
+        if (/NDC/.test(el.getAttribute("xsi:type") || "")) return el.textContent.trim();
+      }
+      return "";
+    } finally { clearTimeout(t); }
+  }
+  throw new Error("busy");
+}
+
 /* ---------- list ---------- */
 function rowHtml(b) {
-  return `<li><button class="row" data-id="${esc(b.id)}">${coverImg(b)}<span class="main"><div class="t">${esc(b.title)}</div><div class="a">${esc(b.author || "著者未登録")}${b.publisher ? " · " + esc(b.publisher) : ""}</div></span><span class="pill s-${esc(b.status)}">${esc(b.status)}</span></button></li>`;
+  return `<li><button class="row" data-id="${esc(b.id)}">${coverImg(b)}<span class="main"><div class="t">${esc(b.title)}</div><div class="a">${b.kind ? `<span class="ktag">${esc(b.kind)}</span>` : ""}${esc(b.author || "著者未登録")}${b.publisher ? " · " + esc(b.publisher) : ""}</div></span><span class="pill s-${esc(b.status)}">${esc(b.status)}</span></button></li>`;
 }
 function volRange(g) {
   const infos = g.map(seriesInfo);
@@ -247,7 +323,7 @@ function groupHtml(key, g) {
   const face = sorted.find((b) => b.cover) || sorted[0];
   const st = d === n ? "読了" : r ? "読書中" : d ? `${n - d}冊未読` : "未読";
   const stCls = d === n ? "s-読了" : r ? "s-読書中" : "";
-  return `<li><button class="row grp" data-series="${esc(key)}"><span class="stack">${coverImg(face)}</span><span class="main"><div class="t">${esc(seriesInfo(face).name)}</div><div class="a">${esc(face.author || "")} · ${n}冊${volRange(g) ? "（" + volRange(g) + "）" : ""}</div><div class="bar"><i style="width:${(d / n) * 100}%;background:var(--done)"></i><i style="width:${(r / n) * 100}%;background:var(--reading)"></i></div></span><span class="pill ${stCls}">${esc(st)}</span></button></li>`;
+  return `<li><button class="row grp" data-series="${esc(key)}"><span class="stack">${coverImg(face)}</span><span class="main"><div class="t">${esc(seriesInfo(face).name)}</div><div class="a">${face.kind ? `<span class="ktag">${esc(face.kind)}</span>` : ""}${esc(face.author || "")} · ${n}冊${volRange(g) ? "（" + volRange(g) + "）" : ""}</div><div class="bar"><i style="width:${(d / n) * 100}%;background:var(--done)"></i><i style="width:${(r / n) * 100}%;background:var(--reading)"></i></div></span><span class="pill ${stCls}">${esc(st)}</span></button></li>`;
 }
 function render() {
   buildSeries();
@@ -256,7 +332,12 @@ function render() {
   $("count").innerHTML = `<b>${counts.all}</b> 冊`;
   $("chips").innerHTML = [["all", "すべて"], ...STATUSES.map((s) => [s, s])].map(([k, l]) => `<button class="chip" data-f="${k}" aria-pressed="${S.filter === k}">${l} ${counts[k]}</button>`).join("");
   const q = norm(S.q);
-  const rows = all.filter((b) => (S.filter === "all" || b.status === S.filter) && (!q || norm([b.title, b.author, b.publisher, b.series, b.label, b.isbn, b.memo, b.location].join(" ")).includes(q)));
+  const kc = { all: all.length }; Kinds.LIST.forEach((k) => (kc[k] = all.filter((b) => b.kind === k).length));
+  const unk = all.filter((b) => !b.kind).length;
+  if (S.kind !== "all" && !kc[S.kind] && !(S.kind === "" && unk)) S.kind = "all";
+  $("kinds").innerHTML = [["all", "ジャンル：すべて"], ...Kinds.LIST.filter((k) => kc[k]).map((k) => [k, k]), ...(unk ? [["", "未分類"]] : [])]
+    .map(([k, l]) => `<button class="chip kchip" data-k="${k}" aria-pressed="${S.kind === k}">${l}${k === "all" ? "" : " " + (k ? kc[k] : unk)}</button>`).join("");
+  const rows = all.filter((b) => (S.filter === "all" || b.status === S.filter) && (S.kind === "all" || (b.kind || "") === S.kind) && (!q || norm([b.title, b.author, b.publisher, b.series, b.label, b.isbn, b.memo, b.location].join(" ")).includes(q)));
   rows.sort(sorter);
   const list = $("list"), empty = $("empty");
   if (!all.length) {
@@ -285,6 +366,7 @@ function openSeries(key) {
   openSheet(`<div class="head">${coverImg(g.find((b) => b.cover) || g[0], "hcover")}<div class="main"><h2>${esc(name)}</h2><p class="sub">${esc(g[0].author || "")}<br>${g.length}冊${volRange(g) ? "（" + volRange(g) + "）" : ""} · 読了 ${d} / ${g.length}</p></div></div>
     <ul class="vlist">${g.map((b) => `<li><button class="vrow" data-id="${esc(b.id)}">${coverImg(b, "vcover")}<span class="main"><div class="t">${esc(b.title)}</div>${b.memo ? `<div class="a">${esc(b.memo)}</div>` : ""}</span></button><button class="pill s-${esc(b.status)} vst" data-cycle="${esc(b.id)}" aria-label="読書状況を切り替え">${esc(b.status)}</button></li>`).join("")}</ul>
     <p class="hint" style="margin:8px 0 0">右の読書状況をタップすると 未読 → 読書中 → 読了 と切り替わります。</p>
+    <div class="form" style="margin-top:12px">${kindSegHtml(g.every((b) => b.kind === g[0].kind) ? g[0].kind : "", "このシリーズのジャンル")}</div>
     <div class="actions"><button class="btn" id="allDone">まとめて読了にする</button><button class="btn" id="renameSeries">シリーズ名を変える</button></div>
     <div class="actions" style="margin-top:8px"><button class="btn primary" id="closeSeries">閉じる</button></div>`);
   $("sheet").querySelector(".vlist").onclick = (e) => {
@@ -292,6 +374,11 @@ function openSeries(key) {
     if (c) { const id = c.dataset.cycle, b = DB.books.get(id); const nx = STATUSES[(STATUSES.indexOf(b.status) + 1) % 3]; DB.put(id, { ...b, status: nx, updatedAt: Date.now() }); render(); openSeries(key); return; }
     const v = e.target.closest(".vrow"); if (v) openDetail(v.dataset.id);
   };
+  bindKindSeg($("sheet"), (kind) => {
+    const now = Date.now();
+    for (const b of g) DB.books.set(b.id, { ...DB.books.get(b.id), kind, kindAuto: false, updatedAt: now });
+    DB.save(); render(); toast(`「${name}」${g.length}冊を${kind}にしました`);
+  });
   $("allDone").onclick = () => { const now = Date.now(); for (const b of g) DB.books.set(b.id, { ...DB.books.get(b.id), status: "読了", updatedAt: now }); DB.save(); render(); openSeries(key); toast(`「${name}」を全巻読了にしました`); };
   $("renameSeries").onclick = () => {
     openSheet(`<h2>シリーズ名を変える</h2><p class="sub">${g.length}冊すべてのシリーズ名を変えます。別のシリーズと同じ名前にすると1つにまとまります。</p>
@@ -308,6 +395,7 @@ function openSeries(key) {
 }
 $("sort").value = S.sort; $("groupToggle").checked = S.group;
 $("chips").addEventListener("click", (e) => { const c = e.target.closest(".chip"); if (!c) return; S.filter = c.dataset.f; savePrefs(); render(); });
+$("kinds").addEventListener("click", (e) => { const c = e.target.closest(".chip"); if (!c) return; S.kind = c.dataset.k; savePrefs(); render(); });
 $("q").addEventListener("input", (e) => { S.q = e.target.value; render(); });
 $("sort").addEventListener("change", (e) => { S.sort = e.target.value; savePrefs(); render(); });
 $("groupToggle").addEventListener("change", (e) => { S.group = e.target.checked; savePrefs(); render(); });
@@ -322,16 +410,28 @@ function openSheet(html) { const s = $("sheet"); s.innerHTML = `<div class="grip
 function closeSheet() { $("sheet").hidden = true; $("veil").hidden = true; S.editing = null; }
 $("veil").addEventListener("click", closeSheet);
 
+function kindSegHtml(cur, label = "ジャンル") {
+  return `<div class="f full"><label>${label}</label><div class="kindseg" role="group" aria-label="${label}">${Kinds.LIST.map((k) => `<button type="button" data-kind="${k}" aria-pressed="${cur === k}">${k}</button>`).join("")}</div></div>`;
+}
+function bindKindSeg(root, onPick) {
+  root.querySelector(".kindseg").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    root.querySelectorAll(".kindseg button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    if (onPick) onPick(b.dataset.kind);
+  });
+}
 function formHtml(b) {
   return `<div class="seg" role="group" aria-label="読書状況">${STATUSES.map((s) => `<button type="button" class="s-${s}" data-st="${s}" aria-pressed="${b.status === s}">${s}</button>`).join("")}</div>
-  <div class="form">${FIELDS.map(([k, l, c]) => `<div class="f ${c}"><label for="f-${k}">${l}</label>${k === "memo" ? `<textarea id="f-${k}">${esc(b[k])}</textarea>` : `<input id="f-${k}" value="${esc(b[k])}"${k === "isbn" || k === "volume" ? ' inputmode="numeric"' : ""}>`}</div>`).join("")}</div>`;
+  <div class="form">${kindSegHtml(b.kind || Kinds.guess(b).kind)}${FIELDS.map(([k, l, c]) => `<div class="f ${c}"><label for="f-${k}">${l}</label>${k === "memo" ? `<textarea id="f-${k}">${esc(b[k])}</textarea>` : `<input id="f-${k}" value="${esc(b[k])}"${k === "isbn" || k === "volume" ? ' inputmode="numeric"' : ""}>`}</div>`).join("")}</div>`;
 }
 function readForm() {
   const o = {}; FIELDS.forEach(([k]) => (o[k] = $("f-" + k).value.trim()));
   o.status = $("sheet").querySelector('.seg [aria-pressed="true"]')?.dataset.st || "未読";
+  o.kind = $("sheet").querySelector('.kindseg [aria-pressed="true"]')?.dataset.kind || "";
   return o;
 }
 function bindSeg() {
+  bindKindSeg($("sheet"));
   $("sheet").querySelector(".seg").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
     $("sheet").querySelectorAll(".seg button").forEach((x) => x.setAttribute("aria-pressed", x === b));
@@ -384,13 +484,23 @@ function saveForm(id) {
     const dup = DB.findByIsbn(i); if (dup && dup !== id) { openDetail(dup, "このISBNの本はすでに本棚にあります。"); return; }
   }
   const now = Date.now();
-  if (id) { DB.put(id, { ...DB.books.get(id), ...o, updatedAt: now }); toast("保存しました"); }
-  else { if (!o.publisher && o.isbn) o.publisher = guessPublisher(o.isbn); DB.put(DB.nextId(), { ...o, cover: S.newCover || "", format: "紙", addedAt: now, updatedAt: now }); toast(`「${o.title}」を追加しました`); }
+  if (id) {
+    const prev = DB.books.get(id), kindChanged = o.kind !== (prev.kind || "");
+    DB.put(id, { ...prev, ...o, kindAuto: kindChanged ? false : prev.kindAuto, updatedAt: now }); toast("保存しました");
+  } else {
+    if (!o.publisher && o.isbn) o.publisher = guessPublisher(o.isbn);
+    const g = Kinds.guess(o), auto = !o.kind || (o.kind === g.kind && !g.sure);
+    DB.put(DB.nextId(), { ...o, kind: o.kind || g.kind, kindAuto: auto, kindSure: !auto || g.sure, cover: S.newCover || "", format: "紙", addedAt: now, updatedAt: now });
+    toast(`「${o.title}」を追加しました`); refineKinds();
+  }
   closeSheet(); render();
 }
 function addBook(info, status) {
   const now = Date.now(), id = DB.nextId();
   DB.put(id, { title: info.title, author: info.author || "", publisher: info.publisher || guessPublisher(info.isbn), label: info.label || "", series: info.series || "", volume: info.volume || "", isbn: info.isbn, releaseDate: info.releaseDate || "", location: "", genres: "", memo: "", cover: info.cover || "", status, format: "紙", addedAt: now, updatedAt: now });
+  const g = Kinds.guess(DB.books.get(id));
+  DB.put(id, { ...DB.books.get(id), kind: g.kind, kindAuto: true, kindSure: g.sure });
+  refineKinds();
   return id;
 }
 
@@ -578,6 +688,7 @@ function importRecords(records) {
     const prev = DB.books.get(id);
     const b = { ...(prev || {}) };
     for (const k of ["title", "author", "publisher", "label", "series", "volume", "releaseDate", "location", "genres", "memo", "cover", "format"]) if (rec[k] != null) b[k] = String(rec[k]);
+    if (Kinds.LIST.includes(rec.kind)) { b.kind = rec.kind; b.kindAuto = false; }
     b.isbn = isbn || b.isbn || "";
     b.status = STATUSES.includes(rec.status) ? rec.status : b.status || "未読";
     b.addedAt = toTime(rec.addedAt) || b.addedAt || Date.now();
@@ -601,7 +712,7 @@ $("importInput").addEventListener("change", async (e) => {
       records = rows.map((r) => Object.fromEntries(head.map((h, i) => [h.trim(), r[i] ?? ""])));
     }
     const r = importRecords(records);
-    closeSheet(); render(); autoFillCovers();
+    autoKinds(); closeSheet(); render(); autoFillCovers();
     toast(`取り込みました：新規 ${r.added} 冊・更新 ${r.updated} 冊`, 4500);
   } catch (err) { console.error(err); toast("このファイルは読み込めませんでした（JSONかCSVを選んでください）", 5000); }
 });
@@ -668,6 +779,7 @@ $("menuBtn").onclick = () => {
 
 /* ---------- boot ---------- */
 DB.load();
+autoKinds();
 render();
 autoFillCovers();
 window.addEventListener("online", autoFillCovers);
