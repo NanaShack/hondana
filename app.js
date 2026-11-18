@@ -198,29 +198,13 @@ function sorter(a, b) {
 }
 
 /* ---------- 表紙 ---------- */
-// 登録済みの表紙 → 国立国会図書館のサムネイル → 背表紙風の代わりの絵 の順に試す
-const ndlThumb = (isbn) => (isbn ? `https://ndlsearch.ndl.go.jp/thumbnail/${isbn}.jpg` : "");
+// 取得の順番と「画像なし」の判定は covers.js にまとめている
 function hue(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) % 360; return h; }
 function placeholder(b, cls) {
   const label = seriesInfo(b).name || b.title || "";
   return `<span class="${cls} ph" style="--h:${hue(label)}"><span>${esc(String(label).slice(0, 10))}</span></span>`;
 }
-function coverImg(b, cls = "cover") {
-  const first = b.cover || ndlThumb(b.isbn);
-  if (!first) return placeholder(b, cls);
-  const fb = b.cover && b.isbn ? ndlThumb(b.isbn) : "";
-  return `<img class="${cls} cv" src="${esc(first)}" data-fb="${esc(fb)}" data-ph="${esc(placeholder(b, cls))}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
-}
-document.addEventListener("error", (e) => {
-  const img = e.target;
-  if (!(img instanceof HTMLImageElement) || !img.classList.contains("cv")) return;
-  if (img.dataset.fb) { const fb = img.dataset.fb; img.dataset.fb = ""; img.src = fb; return; }
-  const t = document.createElement("template"); t.innerHTML = img.dataset.ph || ""; img.replaceWith(t.content);
-}, true);
-document.addEventListener("load", (e) => {
-  const img = e.target; // 1x1 などの「画像なし」を受け取ったときも代わりの絵にする
-  if (img instanceof HTMLImageElement && img.classList.contains("cv") && img.naturalWidth < 10) img.dispatchEvent(new Event("error"));
-}, true);
+function coverImg(b, cls = "cover") { return Covers.img(b.isbn, b.cover, cls, placeholder(b, cls)); }
 
 /* 表紙が未登録の本は openBD から自動で取ってくる（7日に1回まで） */
 let coverFilling = false;
@@ -674,14 +658,12 @@ $("menuBtn").onclick = () => {
     <button class="btn" id="mJson">バックアップを書き出す（JSON）</button>
     <button class="btn" id="mCsv">CSVで書き出す（スプシ用）</button>
     <button class="btn" id="mImport">ファイルから取り込む（JSON / CSV）</button>
-    <h3>本の情報</h3>
-    <button class="btn" id="mCovers">表紙画像をまとめて取得${noCover ? `（${noCover} 冊）` : ""}</button>
     <p class="hint">最終バックアップ：${fmtAgo(DB.meta.lastBackup)}</p>
     <button class="btn" id="mClose">閉じる</button>
   </div>`);
   $("mJson").onclick = exportJson; $("mCsv").onclick = exportCsv;
   $("mImport").onclick = () => $("importInput").click();
-  $("mCovers").onclick = fetchCovers; $("mClose").onclick = closeSheet;
+  $("mClose").onclick = closeSheet;
 };
 
 /* ---------- boot ---------- */

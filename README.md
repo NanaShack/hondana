@@ -5,7 +5,8 @@
 ## 機能
 
 - **バーコードで追加**：カメラを本の裏表紙に向けるだけでISBNを読み取ります。続けて何冊でも登録できます
-- **書誌情報の自動入力**：ISBNから書名・著者・出版社・表紙を [openBD](https://openbd.jp/)（なければ Google Books）で取得します
+- **書誌情報の自動入力**：ISBNから書名・著者・出版社を [openBD](https://openbd.jp/)（なければ Google Books）で取得します
+- **表紙の自動表示**：Google Books → Amazon → 国立国会図書館 の順に表紙画像を探し、見つかったものを端末に覚えます（`covers.js`）
 - **検索・絞り込み・並び替え**、シリーズごとのまとめ表示（読了の進み具合つき）
 - **新刊チェック**（`shinkan.html`）：本棚の作家の新刊・発売予定を [国立国会図書館サーチ](https://ndlsearch.ndl.go.jp/) で調べ、持っていない本だけを一覧にします。シリーズの続きには印がつきます
 - **バックアップ**：JSON / CSV で書き出し・取り込み
@@ -27,6 +28,7 @@
 | --- | --- |
 | `index.html` / `style.css` / `app.js` | アプリ本体 |
 | `shinkan.html` / `shinkan.js` | 新刊チェック |
+| `covers.js` | 表紙画像の取得（本棚・新刊チェック共通） |
 | `sw.js` / `manifest.webmanifest` | オフライン対応とホーム画面用の設定 |
 | `zxing.min.js` | バーコード読み取りライブラリ [ZXing](https://github.com/zxing-js/library) 0.21.3（Apache License 2.0、`zxing-LICENSE`） |
 

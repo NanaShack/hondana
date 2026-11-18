@@ -186,7 +186,7 @@ const coverOf = (isbn) => (isbn && SK.covers[isbn]?.u) || "";
 function coverSrc(isbn) { return coverOf(isbn) || (isbn ? `https://ndlsearch.ndl.go.jp/thumbnail/${isbn}.jpg` : ""); }
 function thumb(it) {
   const ch = esc(String(it.title).trim().charAt(0));
-  return it.isbn ? `<span class="thumb"><img src="${esc(coverSrc(it.isbn))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.textContent='${ch}'"></span>` : `<span class="thumb">${ch}</span>`;
+  return `<span class="thumb">${Covers.img(it.isbn, coverOf(it.isbn), "", ch)}</span>`;
 }
 let coverBusy = false;
 async function ensureCovers() {
@@ -252,7 +252,6 @@ function render() {
     sec("発売予定", `${list.filter((i) => i.phase === "soon").length}冊`, list.filter((i) => i.phase === "soon").sort(asc)) +
     sec("今月発売", `${list.filter((i) => i.phase === "month").length}冊`, list.filter((i) => i.phase === "month").sort(asc)) +
     sec("最近発売", `${LOOKBACK_MONTHS}か月以内`, list.filter((i) => i.phase === "past").sort((a, b) => -asc(a, b)));
-  ensureCovers();
 }
 $("chips").addEventListener("click", (e) => { const c = e.target.closest(".chip"); if (!c) return; FILTER = c.dataset.f; render(); });
 
@@ -266,7 +265,7 @@ $("sections").addEventListener("click", (e) => {
   const it = ITEMS.find((i) => i.key === b.dataset.key); if (!it) return;
   $("sheet").dataset.kind = "item";
   const q = encodeURIComponent(it.isbn || it.title);
-  openSheet(`<div class="head">${it.isbn ? `<img src="${esc(coverSrc(it.isbn))}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<div class="main"><h2>${esc(it.title)}</h2><p class="sub">${esc(it.author)}</p></div></div>
+  openSheet(`<div class="head">${it.isbn ? Covers.img(it.isbn, coverOf(it.isbn), "hcover", "") : ""}<div class="main"><h2>${esc(it.title)}</h2><p class="sub">${esc(it.author)}</p></div></div>
     <p class="sub">${esc(it.publisher)}${it.label ? `（${esc(it.label)}）` : ""} · ${esc(fmtDate(it.date))}${it.phase === "soon" ? "発売予定" : "発売"}${it.price ? ` · ${Number(it.price).toLocaleString()}円` : ""}${it.isbn ? `<br>ISBN ${esc(it.isbn)}` : ""}</p>
     ${it.series ? `<p class="notice">本棚の「${esc(it.series)}」の続きのようです。</p>` : ""}
     <div class="linkrow">
