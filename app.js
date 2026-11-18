@@ -103,7 +103,10 @@ function fromOpenBD(item) {
   const s = item && item.summary; if (!s || !s.title) return null;
   let title = s.title.trim();
   if (s.volume && !title.includes(s.volume)) title += " " + s.volume;
-  const author = String(s.author || "").replace(/／[^\s]*/g, "").trim().split(/\s+/).filter(Boolean).join("、");
+  // 「荒川弘／著」「宮部,みゆき,1960-」のような書き方を「宮部 みゆき」にそろえる
+  const author = String(s.author || "").replace(/／[^\s]*/g, "").trim().split(/\s+/).filter(Boolean)
+    .map((n) => n.replace(/,\s*\d{4}-?\d*$/, "").replace(/^([^,]+),\s*([^,]+)$/, "$1 $2"))
+    .filter((n) => !/^\d{4}-?\d*$/.test(n)).join("、");
   let label = "";
   try {
     const col = item.onix.DescriptiveDetail.Collection;
@@ -218,9 +221,10 @@ async function autoFillCovers() {
     for (let i = 0; i < targets.length; i += 100) {
       const chunk = targets.slice(i, i + 100);
       const j = await fetchJson(`https://api.openbd.jp/v1/get?isbn=${chunk.map(([, b]) => b.isbn).join(",")}`, 20000);
-      chunk.forEach(([id, b], k) => {
+      chunk.forEach(([id], k) => {
         const s = j[k] && j[k].summary;
-        const nb = { ...b, coverTried: Date.now() };
+        const cur = DB.books.get(id); if (!cur) return;   // 待っている間に変わった内容を上書きしない
+        const nb = { ...cur, coverTried: Date.now() };
         if (s && s.cover) { nb.cover = s.cover; got++; }
         if (s && !nb.releaseDate && s.pubdate) nb.releaseDate = fmtDate(s.pubdate);
         DB.books.set(id, nb);
@@ -443,9 +447,20 @@ function headHtml(b, title) {
 function openDetail(id, notice) {
   const b = DB.books.get(id); if (!b) return; S.editing = id;
   openSheet(`${notice ? `<p class="notice">${esc(notice)}</p>` : ""}${headHtml(b)}${formHtml(b)}
+  <div class="actions"><button class="btn" id="lookupBtn" style="flex:1">ISBNで空欄を埋める</button></div>
   <div class="actions"><button class="btn danger" id="delBtn">削除</button><button class="btn primary" id="saveBtn">保存</button></div>`);
   bindSeg();
   $("saveBtn").onclick = () => saveForm(id);
+  $("lookupBtn").onclick = async () => {
+    const isbn = toIsbn13($("f-isbn").value); if (!isbn) { toast("ISBNを正しく入力してください（978から始まる13桁）"); $("f-isbn").focus(); return; }
+    const dup = DB.findByIsbn(isbn); if (dup && dup !== id) { openDetail(dup, "このISBNの本はすでに本棚にあります。"); return; }
+    $("f-isbn").value = isbn;
+    busy(true, "調べています…"); const info = await lookup(isbn); busy(false);
+    if (!info) { toast("見つかりませんでした。ISBNを確認してください"); return; }
+    let n = 0;
+    for (const k of ["title", "author", "publisher", "label", "series", "volume", "releaseDate"]) { const el = $("f-" + k); if (el && !el.value.trim() && info[k]) { el.value = info[k]; n++; } }
+    toast(n ? `${n} 項目を埋めました。「保存」で確定します` : "空欄はありませんでした（入力済みの項目は変えていません）");
+  };
   $("delBtn").onclick = () => confirmDelete(id);
 }
 function confirmDelete(id) {
@@ -485,8 +500,15 @@ function saveForm(id) {
   }
   const now = Date.now();
   if (id) {
-    const prev = DB.books.get(id), kindChanged = o.kind !== (prev.kind || "");
-    DB.put(id, { ...prev, ...o, kindAuto: kindChanged ? false : prev.kindAuto, updatedAt: now }); toast("保存しました");
+    const prev = DB.books.get(id), kindChanged = o.kind !== (prev.kind || ""), isbnChanged = o.isbn !== (prev.isbn || "");
+    const nb = { ...prev, ...o, kindAuto: kindChanged ? false : prev.kindAuto, updatedAt: now };
+    if (isbnChanged && nb.kindAuto !== false) {
+      // ISBNが変わったら表紙とジャンルを調べ直す
+      const g = Kinds.guess(nb);
+      Object.assign(nb, { kind: g.kind || nb.kind, kindSure: g.sure, kindCheckedAt: 0, coverTried: 0 });
+    }
+    DB.put(id, nb); toast("保存しました");
+    if (isbnChanged) { refineKinds(); autoFillCovers(); }
   } else {
     if (!o.publisher && o.isbn) o.publisher = guessPublisher(o.isbn);
     const g = Kinds.guess(o), auto = !o.kind || (o.kind === g.kind && !g.sure);
