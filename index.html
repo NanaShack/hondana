@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>私の本棚</title>
+<meta name="theme-color" content="#f3f5f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121815" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="本棚">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="wrap">
+  <div class="top">
+    <h1>私の本棚</h1>
+    <div class="top-r">
+      <span class="count" id="count"><b>0</b> 冊</span>
+      <button class="iconbtn" id="menuBtn" aria-label="メニュー">…</button>
+    </div>
+  </div>
+  <div class="search">
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="q" type="search" placeholder="タイトル・著者・出版社・ISBNで検索" autocomplete="off">
+  </div>
+  <div class="chips" id="chips" role="group" aria-label="読書状況で絞り込み"></div>
+  <div class="tools">
+    <label class="toggle"><input type="checkbox" id="groupToggle"> シリーズでまとめる</label>
+    <label>並び順 <select id="sort">
+      <option value="added">追加が新しい順</option>
+      <option value="title">タイトル順</option>
+      <option value="author">著者順</option>
+      <option value="publisher">出版社順</option>
+    </select></label>
+  </div>
+</header>
+
+<main class="wrap">
+  <ul class="list" id="list"></ul>
+  <div class="empty" id="empty" hidden></div>
+</main>
+
+<div class="dock"><div class="wrap in">
+  <button class="scan" id="scanBtn">
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8v8M10 8v8M13 8v8M16 8v8"/></svg>
+    バーコードで追加
+  </button>
+  <button class="manual" id="manualBtn">手入力</button>
+</div></div>
+
+<!-- camera scanner -->
+<section class="scanner" id="scanner" hidden aria-label="バーコード読み取り">
+  <video id="video" playsinline muted></video>
+  <div class="frame"><div class="box"><i class="laser"></i></div><p id="scanHint">裏表紙の上側のバーコード（978…）を枠に合わせてください</p></div>
+  <div class="scan-top">
+    <button class="pillbtn" id="scanClose">閉じる</button>
+    <span class="scan-count" id="scanCount"></span>
+    <button class="pillbtn" id="scanPhoto">写真から</button>
+  </div>
+  <div class="scan-card" id="scanCard" hidden></div>
+</section>
+
+<input type="file" id="photoInput" accept="image/*" capture="environment" hidden>
+<input type="file" id="importInput" accept=".json,.csv,application/json,text/csv" hidden>
+
+<div class="veil" id="veil" hidden></div>
+<section class="sheet wrap" id="sheet" hidden role="dialog" aria-modal="true"></section>
+<div class="toast" id="toast" hidden></div>
+<div class="busy" id="busy" hidden><div id="busyText">読み込み中…</div></div>
+
+<script src="zxing.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
